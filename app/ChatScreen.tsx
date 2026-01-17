@@ -11,11 +11,14 @@ import {
     TextInput,
     View,
 } from "react-native";
+import "react-native-get-random-values";
+import { v4 as uuidv4 } from "uuid";
 
 type ChatMessage = {
-  id: number;
+  id: string;
   role: "user" | "assistant";
   content: string;
+  status: "sending" | "sent" | "error";
 };
 
 const API_BASE_URL = "https://83d1f1023a50.ngrok-free.app";
@@ -26,7 +29,6 @@ const EXTRA_KEYBOARD_OFFSET = Platform.OS === "ios" ? 48 : 32;
 export default function ChatScreen() {
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [loading, setLoading] = useState(false);
 
   const flatListRef = useRef<FlatList<ChatMessage>>(null);
   const inputRef = useRef<TextInput>(null);
@@ -72,21 +74,69 @@ export default function ChatScreen() {
   const sendMessage = async () => {
     if (!message.trim()) return;
 
-    setLoading(true);
+    const content = message;
+    setMessage("");
+
+    const userMessageId = uuidv4();
+    const typingId = uuidv4();
+
+    // 1. Optimistic user message
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: userMessageId,
+        role: "user",
+        content,
+        status: "sending",
+      },
+      {
+        id: typingId,
+        role: "assistant",
+        content: "",
+        status: "sending",
+      },
+    ]);
+
     try {
       const res = await fetch(`${API_BASE_URL}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message }),
+        body: JSON.stringify({ message: content }),
       });
 
-      const data: { messages: ChatMessage[] } = await res.json();
-      setMessages(data.messages);
-      setMessage("");
+      const data: { reply: string } = await res.json();
+
+      // Mark user message as sent
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === userMessageId ? { ...m, status: "sent" } : m,
+        ),
+      );
+
+      // Replace typing indicator with assistant response
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === typingId
+            ? {
+                ...m,
+                content: data.reply,
+                status: "sent",
+              }
+            : m,
+        ),
+      );
     } catch (err) {
       console.error("Send message failed:", err);
-    } finally {
-      setLoading(false);
+
+      // Mark user message as error
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === userMessageId ? { ...m, status: "error" } : m,
+        ),
+      );
+
+      // Remove typing indicator
+      setMessages((prev) => prev.filter((m) => m.id !== typingId));
     }
   };
 
@@ -97,10 +147,18 @@ export default function ChatScreen() {
       <FlatList
         ref={flatListRef}
         data={messages}
-        keyExtractor={(item) => item.id.toString()}
+        keyExtractor={(item) => item.id}
         renderItem={({ item }) => (
-          <Text style={styles.messageText}>
-            {item.role}: {item.content}
+          <Text
+            style={[
+              styles.messageText,
+              item.status === "sending" && styles.sending,
+              item.status === "error" && styles.error,
+            ]}
+          >
+            {item.role === "assistant" && item.content === ""
+              ? "Coach is typing…"
+              : item.content}
           </Text>
         )}
         style={{ flex: 1 }}
@@ -130,12 +188,9 @@ export default function ChatScreen() {
             value={message}
             onChangeText={setMessage}
             style={styles.messageInput}
+            onSubmitEditing={sendMessage}
           />
-          <Button
-            title={loading ? "Sending..." : "Send"}
-            onPress={sendMessage}
-            disabled={loading}
-          />
+          <Button title="Send" onPress={sendMessage} />
         </Animated.View>
       )}
 
@@ -150,12 +205,9 @@ export default function ChatScreen() {
               value={message}
               onChangeText={setMessage}
               style={styles.messageInput}
+              onSubmitEditing={sendMessage}
             />
-            <Button
-              title={loading ? "Sending..." : "Send"}
-              onPress={sendMessage}
-              disabled={loading}
-            />
+            <Button title="Send" onPress={sendMessage} />
           </View>
         </InputAccessoryView>
       )}
@@ -192,5 +244,11 @@ const styles = StyleSheet.create({
   messageText: {
     marginBottom: 8,
     fontSize: 16,
+  },
+  sending: {
+    opacity: 0.6,
+  },
+  error: {
+    color: "red",
   },
 });
