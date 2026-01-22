@@ -1,15 +1,16 @@
 import { useEffect, useRef, useState } from "react";
+import MessageBubble from "../components/MessageBubble";
+
 import {
-    Animated,
-    Button,
-    FlatList,
-    InputAccessoryView,
-    Keyboard,
-    Platform,
-    StyleSheet,
-    Text,
-    TextInput,
-    View,
+  Animated,
+  Button,
+  FlatList,
+  InputAccessoryView,
+  Keyboard,
+  Platform,
+  StyleSheet,
+  TextInput,
+  View,
 } from "react-native";
 import "react-native-get-random-values";
 import { v4 as uuidv4 } from "uuid";
@@ -21,10 +22,11 @@ type ChatMessage = {
   status: "sending" | "sent" | "error";
 };
 
-const API_BASE_URL = "https://83d1f1023a50.ngrok-free.app";
-
-// Extra offset for predictive bar / safe area
+const API_BASE_URL = "https://a6ffb13be771.ngrok-free.app";
 const EXTRA_KEYBOARD_OFFSET = Platform.OS === "ios" ? 48 : 32;
+
+// 🧠 Artificial typing delay (frontend only)
+const TYPING_DELAY_MS = 400;
 
 export default function ChatScreen() {
   const [message, setMessage] = useState("");
@@ -70,8 +72,53 @@ export default function ChatScreen() {
     };
   }, []);
 
+  /* ------------ Backend send helper (unchanged logic) ------------ */
+  const sendMessageToBackend = async (
+    content: string,
+    userMessageId: string,
+    typingId: string,
+  ) => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: content }),
+      });
+
+      const data: {
+        message: { id: string; role: "assistant"; content: string };
+      } = await res.json();
+
+      // Mark user message as sent
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === userMessageId ? { ...m, status: "sent" } : m,
+        ),
+      );
+
+      // Replace typing indicator with assistant response
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === typingId
+            ? { ...m, content: data.message.content, status: "sent" }
+            : m,
+        ),
+      );
+    } catch (err) {
+      console.error("Send message failed:", err);
+
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === userMessageId ? { ...m, status: "error" } : m,
+        ),
+      );
+
+      setMessages((prev) => prev.filter((m) => m.id !== typingId));
+    }
+  };
+
   /* ------------------ Send message ------------------ */
-  const sendMessage = async () => {
+  const sendMessage = () => {
     if (!message.trim()) return;
 
     const content = message;
@@ -80,7 +127,7 @@ export default function ChatScreen() {
     const userMessageId = uuidv4();
     const typingId = uuidv4();
 
-    // 1. Optimistic user message
+    // 1. Optimistic user message + typing placeholder
     setMessages((prev) => [
       ...prev,
       {
@@ -97,69 +144,21 @@ export default function ChatScreen() {
       },
     ]);
 
-    try {
-      const res = await fetch(`${API_BASE_URL}/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: content }),
-      });
-
-      const data: { reply: string } = await res.json();
-
-      // Mark user message as sent
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === userMessageId ? { ...m, status: "sent" } : m,
-        ),
-      );
-
-      // Replace typing indicator with assistant response
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === typingId
-            ? {
-                ...m,
-                content: data.reply,
-                status: "sent",
-              }
-            : m,
-        ),
-      );
-    } catch (err) {
-      console.error("Send message failed:", err);
-
-      // Mark user message as error
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === userMessageId ? { ...m, status: "error" } : m,
-        ),
-      );
-
-      // Remove typing indicator
-      setMessages((prev) => prev.filter((m) => m.id !== typingId));
-    }
+    // 2. Artificial typing delay before hitting backend
+    setTimeout(() => {
+      sendMessageToBackend(content, userMessageId, typingId);
+    }, TYPING_DELAY_MS);
   };
 
   /* ------------------ UI ------------------ */
   return (
     <View style={styles.container}>
-      {/* Messages */}
       <FlatList
         ref={flatListRef}
         data={messages}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => (
-          <Text
-            style={[
-              styles.messageText,
-              item.status === "sending" && styles.sending,
-              item.status === "error" && styles.error,
-            ]}
-          >
-            {item.role === "assistant" && item.content === ""
-              ? "Coach is typing…"
-              : item.content}
-          </Text>
+          <MessageBubble role={item.role} content={item.content} />
         )}
         style={{ flex: 1 }}
         contentContainerStyle={{
@@ -175,9 +174,7 @@ export default function ChatScreen() {
             styles.inputRow,
             {
               transform: [
-                {
-                  translateY: Animated.multiply(keyboardHeight, -1),
-                },
+                { translateY: Animated.multiply(keyboardHeight, -1) },
               ],
             },
           ]}
@@ -240,15 +237,5 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     marginRight: 8,
     backgroundColor: "#fff",
-  },
-  messageText: {
-    marginBottom: 8,
-    fontSize: 16,
-  },
-  sending: {
-    opacity: 0.6,
-  },
-  error: {
-    color: "red",
   },
 });
